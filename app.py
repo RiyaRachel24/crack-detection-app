@@ -1,6 +1,5 @@
 import streamlit as st
 import numpy as np
-import cv2
 from PIL import Image
 from ultralytics import YOLO
 
@@ -111,3 +110,4 @@ if uploaded_file is not None:
             st.warning("MEDIUM severity crack")
         else:
             st.error("HIGH severity crack")
+
