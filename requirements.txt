@@ -1,7 +1,5 @@
 streamlit
-ultralytics
-torch
-torchvision
-numpy
-pillow
+ultralytics==8.1.0
 opencv-python-headless
+numpy
+Pillow
