@@ -5,7 +5,7 @@ import numpy as np
 
 st.set_page_config(page_title="Crack Detection App", layout="centered")
 
-st.title("🛣️ Crack Detection & Severity Analysis")
+st.title("Crack Detection & Severity Analysis")
 
 @st.cache_resource
 def load_model():
@@ -36,7 +36,8 @@ if uploaded_file:
     else:
         severity = "Low"
 
-    st.success(f"🧠 Prediction: **{label}**")
-    st.info(f"📊 Confidence: **{confidence:.2f}**")
-    st.warning(f"⚠️ Severity: **{severity}**")
+    st.success(f" Prediction: **{label}**")
+    
+    st.warning(f"Severity: **{severity}**")
+
 
