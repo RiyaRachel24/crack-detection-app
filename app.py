@@ -39,3 +39,4 @@ if uploaded_file:
     st.success(f"🧠 Prediction: **{label}**")
     st.info(f"📊 Confidence: **{confidence:.2f}**")
     st.warning(f"⚠️ Severity: **{severity}**")
+
