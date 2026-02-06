@@ -12,59 +12,54 @@ uploaded_file = st.file_uploader(
 )
 
 def calculate_severity(crack_lengths):
-    total_length = sum(crack_lengths)
+    if not crack_lengths:
+        return "No Crack"
 
-    if total_length < 100:
+    max_len = max(crack_lengths)
+
+    if max_len < 150:
         return "Low"
-    elif total_length < 300:
+    elif max_len < 300:
         return "Moderate"
     else:
         return "High"
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    img_np = np.array(image)
+    img = np.array(image)
 
-    # --- GRAYSCALE ---
-    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
 
-    # --- THRESHOLDING ---
-    _, thresh = cv2.threshold(
-        gray, 150, 255, cv2.THRESH_BINARY_INV
-    )
-
-    # --- FIND CONTOURS ---
     contours, _ = cv2.findContours(
         thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
-    crack_lengths = []
-    crack_id = 1
+    # Sort contours left to right
+    contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[0])
 
-    output_img = img_np.copy()
+    crack_lengths = []
+    output = img.copy()
+    crack_id = 1
 
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 50:
-            continue  # remove noise
+        if area < 200:   # IMPORTANT: removes tiny noise
+            continue
 
-        # Draw YELLOW contour
-        cv2.drawContours(
-            output_img, [cnt], -1, (255, 255, 0), 2
-        )
-
-        # Crack length
-        length = cv2.arcLength(cnt, True)
+        length = cv2.arcLength(cnt, False)
         crack_lengths.append(length)
 
-        # Label crack
+        # Draw contour (cleaner)
+        cv2.drawContours(output, [cnt], -1, (255, 255, 0), 3)
+
         x, y, w, h = cv2.boundingRect(cnt)
         cv2.putText(
-            output_img,
-            f"Crack {crack_id}",
-            (x, y - 5),
+            output,
+            str(crack_id),
+            (x + w//2, y - 8),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
+            0.7,
             (255, 255, 0),
             2
         )
@@ -73,15 +68,11 @@ if uploaded_file:
 
     severity = calculate_severity(crack_lengths)
 
-    st.image(
-        output_img,
-        caption="Highlighted Cracks (Yellow)",
-        use_column_width=True
-    )
+    st.image(output, caption="Detected Cracks", use_column_width=True)
 
-    st.subheader("🧮 Crack Measurements")
+    st.subheader("📏 Crack-wise Lengths")
     for i, l in enumerate(crack_lengths):
-        st.write(f"Crack {i+1}: Length = {l:.2f} pixels")
+        st.write(f"Crack {i+1}: {l:.2f} pixels")
 
-    st.subheader("🚦 Severity Level")
+    st.subheader("🚦 Severity")
     st.success(severity)
