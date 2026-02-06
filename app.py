@@ -1,78 +1,95 @@
 import streamlit as st
-import cv2
-import numpy as np
+from ultralytics import YOLO
 from PIL import Image
+import numpy as np
+import cv2
 
-st.set_page_config(page_title="Crack Detection App", layout="centered")
-st.title("🟡 Crack Detection & Severity Analysis")
+from skimage.filters import threshold_otsu
+from skimage.morphology import skeletonize
 
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(
+    page_title="Crack Detection & Severity Analysis",
+    layout="centered"
+)
+
+st.title("Crack Detection & Severity Analysis")
+
+# ---------------- LOAD MODEL ----------------
+@st.cache_resource
+def load_model():
+    return YOLO("best.pt")   # your trained crack / non-crack model
+
+model = load_model()
+
+# ---------------- IMAGE UPLOAD ----------------
 uploaded_file = st.file_uploader(
     "Upload an image",
     type=["jpg", "jpeg", "png"]
 )
 
-def calculate_severity(crack_lengths):
-    if not crack_lengths:
-        return "No Crack"
+if uploaded_file is not None:
 
-    max_len = max(crack_lengths)
-
-    if max_len < 150:
-        return "Low"
-    elif max_len < 300:
-        return "Moderate"
-    else:
-        return "High"
-
-if uploaded_file:
+    # ---- Read image ----
     image = Image.open(uploaded_file).convert("RGB")
-    img = np.array(image)
+    img_np = np.array(image)
 
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+    st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    contours, _ = cv2.findContours(
-        thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
+    # ---- Model prediction ----
+    results = model(image)
+    probs = results[0].probs
 
-    # Sort contours left to right
-    contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[0])
+    pred_class = probs.top1
+    class_name = model.names[pred_class]
 
-    crack_lengths = []
-    output = img.copy()
-    crack_id = 1
+    st.markdown(f"### Prediction: **{class_name}**")
 
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < 200:   # IMPORTANT: removes tiny noise
-            continue
+    # ---------------- ONLY IF CRACK ----------------
+    if class_name.lower() == "crack":
 
-        length = cv2.arcLength(cnt, False)
-        crack_lengths.append(length)
+        # ---- GRAYSCALE ----
+        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
 
-        # Draw contour (cleaner)
-        cv2.drawContours(output, [cnt], -1, (255, 255, 0), 3)
+        # ---- THRESHOLDING ----
+        thresh_val = threshold_otsu(gray)
+        binary = gray < thresh_val     # cracks are darker
 
-        x, y, w, h = cv2.boundingRect(cnt)
-        cv2.putText(
-            output,
-            str(crack_id),
-            (x + w//2, y - 8),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (255, 255, 0),
-            2
+        # ---- SKELETONIZATION (THIS IS THE KEY STEP) ----
+        skeleton = skeletonize(binary)
+
+        # ---- CRACK LENGTH ----
+        crack_length_pixels = np.sum(skeleton)
+
+        # ---- SEVERITY LOGIC (FIXED) ----
+        if crack_length_pixels < 500:
+            severity = "Low"
+        elif crack_length_pixels < 1500:
+            severity = "Moderate"
+        else:
+            severity = "High"
+
+        # ---- OVERLAY SKELETON ON IMAGE ----
+        overlay = img_np.copy()
+        overlay[skeleton] = [255, 255, 0]   # YELLOW SINGLE LINE
+
+        st.image(
+            overlay,
+            caption="Detected Crack (Skeletonized)",
+            use_column_width=True
         )
 
-        crack_id += 1
+        st.markdown(f"### Severity: **{severity}**")
+        st.markdown(f"Crack Length (pixels): `{crack_length_pixels}`")
 
-    severity = calculate_severity(crack_lengths)
+        # ---- MANUAL SUGGESTIONS ----
+        st.subheader("Suggested Action")
+        if severity == "Low":
+            st.write("- Surface sealing\n- Monitor periodically")
+        elif severity == "Moderate":
+            st.write("- Crack filling\n- Prevent water ingress")
+        else:
+            st.write("- Structural inspection required\n- Immediate repair recommended")
 
-    st.image(output, caption="Detected Cracks", use_column_width=True)
-
-    st.subheader("📏 Crack-wise Lengths")
-    for i, l in enumerate(crack_lengths):
-        st.write(f"Crack {i+1}: {l:.2f} pixels")
-
-    st.subheader("🚦 Severity")
-    st.success(severity)
+    else:
+        st.success("No crack detected in the image.")
