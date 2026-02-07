@@ -1,143 +1,99 @@
 import streamlit as st
-import cv2
+from ultralytics import YOLO
+from PIL import Image, ImageDraw
 import numpy as np
-from PIL import Image
-from skimage.morphology import skeletonize
-from skimage.measure import label, regionprops
 
-# ---------------- PAGE CONFIG ----------------
-st.set_page_config(
-    page_title="Crack Detection & Severity Analysis",
-    layout="centered"
-)
-
+# -------------------- CONFIG --------------------
+st.set_page_config(page_title="Crack Detection App", layout="centered")
 st.title("🛣️ Crack Detection & Severity Analysis")
 
-# ---------------- HELPERS ----------------
-def preprocess(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    return gray, blur
+MODEL_PATH = "best.pt"
 
-def detect_cracks(gray):
-    # Adaptive thresholding (best for concrete textures)
-    binary = cv2.adaptiveThreshold(
-        gray,
-        255,
-        cv2.ADAPTIVE_THRESH_MEAN_C,
-        cv2.THRESH_BINARY_INV,
-        15,
-        3
-    )
-    kernel = np.ones((3, 3), np.uint8)
-    clean = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-    return clean
+# -------------------- LOAD MODEL --------------------
+@st.cache_resource
+def load_model():
+    return YOLO(MODEL_PATH)
 
-def skeletonize_image(binary):
-    binary_bool = binary > 0
-    skeleton = skeletonize(binary_bool)
-    return skeleton
+model = load_model()
 
-def analyze_cracks(skeleton):
-    labeled = label(skeleton)
-    cracks = []
-
-    for region in regionprops(labeled):
-        if region.area < 30:
-            continue  # remove noise
-        cracks.append(region.area)  # length in pixels
-
-    return cracks, labeled
-
-def severity_from_length(total_length):
-    if total_length < 300:
-        return "Low"
-    elif total_length < 700:
-        return "Moderate"
-    else:
-        return "High"
-
-def suggested_action(severity):
-    if severity == "Low":
-        return [
-            "Monitor crack growth",
-            "Seal surface if required"
-        ]
-    elif severity == "Moderate":
-        return [
-            "Crack filling",
-            "Prevent water ingress"
-        ]
-    else:
-        return [
-            "Structural inspection required",
-            "Immediate repair recommended"
-        ]
-
-def draw_cracks(image, labeled):
-    output = image.copy()
-    h, w, _ = output.shape
-
-    for region in regionprops(labeled):
-        if region.area < 30:
-            continue
-
-        coords = region.coords
-        for y, x in coords:
-            output[y, x] = [255, 255, 0]  # YELLOW skeleton
-
-        cy, cx = region.centroid
-        cv2.putText(
-            output,
-            f"{int(region.label)}",
-            (int(cx), int(cy)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 0),
-            2
-        )
-
-    return output
-
-# ---------------- UI ----------------
+# -------------------- IMAGE UPLOAD --------------------
 uploaded_file = st.file_uploader(
-    "Upload crack image",
+    "Upload an image",
     type=["jpg", "jpeg", "png"]
 )
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
+    st.image(image, caption="Uploaded Image", use_column_width=True)
+
     img_np = np.array(image)
 
-    st.image(img_np, caption="Uploaded Image", use_column_width=True)
+    # -------------------- YOLO INFERENCE --------------------
+    results = model(img_np, conf=0.25)[0]
 
-    gray, blur = preprocess(img_np)
-    binary = detect_cracks(gray)
-    skeleton = skeletonize_image(binary)
+    draw = ImageDraw.Draw(image)
+    crack_lengths = []
 
-    crack_lengths, labeled = analyze_cracks(skeleton)
+    crack_id = 1
 
-    if len(crack_lengths) == 0:
-        st.warning("No cracks detected in the image.")
-    else:
-        overlay = draw_cracks(img_np, labeled)
-        st.image(
-            overlay,
-            caption="Detected Cracks (Skeleton-based)",
-            use_column_width=True
-        )
+    # -------------------- DRAW BOXES --------------------
+    if results.boxes is not None and len(results.boxes) > 0:
+        for box in results.boxes:
+            cls = int(box.cls[0])
+            conf = float(box.conf[0])
 
+            # Assuming class 0 = crack
+            if cls == 0:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+                # Draw bounding box
+                draw.rectangle(
+                    [x1, y1, x2, y2],
+                    outline="yellow",
+                    width=3
+                )
+
+                # Label crack number
+                draw.text(
+                    (x1, y1 - 15),
+                    f"Crack {crack_id}",
+                    fill="yellow"
+                )
+
+                # Approx crack length (box diagonal)
+                length = int(((x2 - x1)**2 + (y2 - y1)**2) ** 0.5)
+                crack_lengths.append((crack_id, length))
+
+                crack_id += 1
+
+        st.image(image, caption="Detected Cracks", use_column_width=True)
+
+        # -------------------- FEATURES --------------------
         st.subheader("📏 Extracted Crack Features")
+
         total_length = 0
-        for i, length in enumerate(crack_lengths, start=1):
-            st.write(f"Crack {i} → Length: {length} pixels")
+        for cid, length in crack_lengths:
+            st.write(f"• Crack {cid} → Length: **{length} pixels**")
             total_length += length
 
-        severity = severity_from_length(total_length)
+        # -------------------- SEVERITY --------------------
+        if total_length < 300:
+            severity = "Low"
+            action = ["Monitor periodically"]
+        elif total_length < 800:
+            severity = "Moderate"
+            action = ["Crack filling", "Prevent water ingress"]
+        else:
+            severity = "High"
+            action = ["Structural inspection", "Immediate repair"]
 
-        st.subheader(f"🚦 Severity: {severity}")
-        st.write(f"Total Crack Length: {total_length} pixels")
+        st.markdown("---")
+        st.subheader(f"🚦 Severity: **{severity}**")
+        st.write(f"Total Crack Length: **{total_length} pixels**")
 
-        st.subheader("🛠 Suggested Action")
-        for act in suggested_action(severity):
-            st.write(f"• {act}")
+        st.subheader("🛠️ Suggested Action")
+        for a in action:
+            st.write(f"• {a}")
+
+    else:
+        st.warning("No cracks detected in the image.")
