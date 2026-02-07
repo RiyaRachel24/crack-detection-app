@@ -62,7 +62,7 @@ if uploaded_file:
             conf = float(box.conf[0])
 
             # class 0 = crack (adjust if your dataset differs)
-                if cls == 0 and conf > 0.2:
+    if cls == 0 and conf > 0.2:
                 crack_count += 1
 
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -108,4 +108,5 @@ if uploaded_file:
         st.subheader("🛠 Suggested Action")
         for action in actions:
             st.write(f"• {action}")
+
 
