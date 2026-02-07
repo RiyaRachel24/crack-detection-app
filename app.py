@@ -3,20 +3,17 @@ from ultralytics import YOLO
 from PIL import Image, ImageDraw
 import numpy as np
 
-# -------------------- CONFIG --------------------
 st.set_page_config(page_title="Crack Detection App", layout="centered")
 st.title("🛣️ Crack Detection & Severity Analysis")
 
 MODEL_PATH = "best.pt"
 
-# -------------------- LOAD MODEL --------------------
 @st.cache_resource
 def load_model():
     return YOLO(MODEL_PATH)
 
 model = load_model()
 
-# -------------------- IMAGE UPLOAD --------------------
 uploaded_file = st.file_uploader(
     "Upload an image",
     type=["jpg", "jpeg", "png"]
@@ -28,47 +25,47 @@ if uploaded_file:
 
     img_np = np.array(image)
 
-    # -------------------- YOLO INFERENCE --------------------
-    results = model(img_np, conf=0.25)[0]
+    # 🔻 LOWER CONFIDENCE
+    results = model(img_np, conf=0.10)[0]
 
     draw = ImageDraw.Draw(image)
     crack_lengths = []
-
     crack_id = 1
 
-    # -------------------- DRAW BOXES --------------------
+    # 🔍 DEBUG INFO
+    st.subheader("🔎 Model Debug Info")
+    st.write("Detected boxes:", 0 if results.boxes is None else len(results.boxes))
+
     if results.boxes is not None and len(results.boxes) > 0:
+        st.write("Class IDs detected:", results.boxes.cls.cpu().numpy().astype(int))
+
         for box in results.boxes:
             cls = int(box.cls[0])
             conf = float(box.conf[0])
 
-            # Assuming class 0 = crack
-            if cls == 0:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
+            # ⚠️ ASSUME ANY DETECTION = CRACK (binary model)
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-                # Draw bounding box
-                draw.rectangle(
-                    [x1, y1, x2, y2],
-                    outline="yellow",
-                    width=3
-                )
+            draw.rectangle(
+                [x1, y1, x2, y2],
+                outline="yellow",
+                width=3
+            )
 
-                # Label crack number
-                draw.text(
-                    (x1, y1 - 15),
-                    f"Crack {crack_id}",
-                    fill="yellow"
-                )
+            draw.text(
+                (x1, y1 - 15),
+                f"Crack {crack_id}",
+                fill="yellow"
+            )
 
-                # Approx crack length (box diagonal)
-                length = int(((x2 - x1)**2 + (y2 - y1)**2) ** 0.5)
-                crack_lengths.append((crack_id, length))
+            length = int(((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5)
+            crack_lengths.append((crack_id, length))
 
-                crack_id += 1
+            crack_id += 1
 
         st.image(image, caption="Detected Cracks", use_column_width=True)
 
-        # -------------------- FEATURES --------------------
+        # -------- FEATURES --------
         st.subheader("📏 Extracted Crack Features")
 
         total_length = 0
@@ -76,7 +73,7 @@ if uploaded_file:
             st.write(f"• Crack {cid} → Length: **{length} pixels**")
             total_length += length
 
-        # -------------------- SEVERITY --------------------
+        # -------- SEVERITY --------
         if total_length < 300:
             severity = "Low"
             action = ["Monitor periodically"]
@@ -96,4 +93,4 @@ if uploaded_file:
             st.write(f"• {a}")
 
     else:
-        st.warning("No cracks detected in the image.")
+        st.warning("No cracks detected by the model.")
