@@ -3,85 +3,108 @@ from ultralytics import YOLO
 from PIL import Image, ImageDraw
 import numpy as np
 
-# ---------------- CONFIG ----------------
-st.set_page_config(page_title="Crack Detection App", layout="centered")
-st.title("🧱 Crack Detection & Severity Analysis")
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(
+    page_title="Crack Detection & Severity Analysis",
+    layout="centered"
+)
 
-MODEL_PATH = "best.pt"
+st.title("Crack Detection & Severity Analysis")
 
 # ---------------- LOAD MODEL ----------------
 @st.cache_resource
 def load_model():
-    return YOLO(MODEL_PATH)
+    return YOLO("best.pt")  # your trained model
 
 model = load_model()
 
-# ---------------- SEVERITY LOGIC ----------------
-def get_severity(length_px):
-    if length_px < 150:
-        return "Low"
-    elif length_px < 400:
-        return "Moderate"
-    else:
-        return "High"
-
-def get_suggestions(severity):
-    if severity == "Low":
-        return ["Monitor periodically", "Seal surface if required"]
-    elif severity == "Moderate":
-        return ["Crack filling", "Prevent water ingress"]
-    else:
-        return ["Structural inspection", "Immediate repair required"]
-
-# ---------------- IMAGE UPLOAD ----------------
+# ---------------- UPLOAD IMAGE ----------------
 uploaded_file = st.file_uploader(
-    "Upload a crack image",
+    "Upload an image",
     type=["jpg", "jpeg", "png"]
 )
 
+# ---------------- SEVERITY LOGIC ----------------
+def calculate_severity(total_length):
+    if total_length < 150:
+        return "Low", ["Monitor periodically"]
+    elif total_length < 400:
+        return "Moderate", [
+            "Crack filling",
+            "Prevent water ingress"
+        ]
+    else:
+        return "High", [
+            "Structural inspection required",
+            "Immediate repair recommended"
+        ]
+
+# ---------------- MAIN LOGIC ----------------
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Image", use_column_width=True)
-
     img_np = np.array(image)
 
-    # ---------------- YOLO INFERENCE ----------------
+    st.image(image, caption="Uploaded Image", use_column_width=True)
+
     results = model(img_np)[0]
 
     draw = ImageDraw.Draw(image)
+
     crack_count = 0
-    lengths = []
+    crack_lengths = []
 
-    for box in results.boxes:
-        cls = int(box.cls[0])
-        conf = float(box.conf[0])
+    # ---------- SAFE BOX HANDLING ----------
+    if results.boxes is not None and len(results.boxes) > 0:
+        for i in range(len(results.boxes)):
+            box = results.boxes[i]
 
-        # Class 0 assumed = crack
-        if cls == 0 and conf > 0.4:
-            crack_count += 1
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            length_px = x2 - x1
-            lengths.append(length_px)
+            cls = int(box.cls[0])
+            conf = float(box.conf[0])
 
-            # Draw box
-            draw.rectangle([x1, y1, x2, y2], outline="yellow", width=3)
-            draw.text((x1, y1 - 10), f"{crack_count}", fill="yellow")
+            # class 0 = crack (adjust if your dataset differs)
+            if cls == 0 and conf > 0.4:
+                crack_count += 1
 
-    st.image(image, caption="Detected Cracks", use_column_width=True)
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                length_px = x2 - x1
+                crack_lengths.append(length_px)
 
-    # ---------------- RESULTS ----------------
+                # Draw clean yellow box
+                draw.rectangle(
+                    [x1, y1, x2, y2],
+                    outline="yellow",
+                    width=3
+                )
+
+                # Number label only (professional)
+                draw.text(
+                    (x1, max(y1 - 15, 0)),
+                    f"{crack_count}",
+                    fill="yellow"
+                )
+
+    # ---------------- DISPLAY OUTPUT IMAGE ----------------
+    st.subheader("Detected Cracks")
+    st.image(image, use_column_width=True)
+
+    # ---------------- FEATURES ----------------
+    st.subheader("📏 Extracted Crack Features")
+
     if crack_count == 0:
-        st.warning("No cracks detected.")
+        st.info("No cracks detected.")
     else:
-        max_length = max(lengths)
-        severity = get_severity(max_length)
+        for i, length in enumerate(crack_lengths):
+            st.write(f"Crack {i+1} → Length: **{length} pixels**")
 
-        st.subheader("📏 Extracted Crack Features")
-        for i, l in enumerate(lengths):
-            st.write(f"Crack {i+1}: Length = {l} pixels")
+        total_length = sum(crack_lengths)
 
-        st.subheader(f"🚨 Severity: {severity}")
+        severity, actions = calculate_severity(total_length)
 
+        # ---------------- SEVERITY ----------------
+        st.subheader(f"⚠️ Severity: **{severity}**")
+        st.write(f"Total Crack Length: **{total_length} pixels**")
+
+        # ---------------- SUGGESTIONS ----------------
         st.subheader("🛠 Suggested Action")
-        for s in get_suggestions(severity):
-            st.write(f"- {s}")
+        for action in actions:
+            st.write(f"• {action}")
