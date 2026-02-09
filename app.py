@@ -3,7 +3,9 @@ import cv2
 import numpy as np
 from PIL import Image
 
-# ------------------ PAGE CONFIG ------------------
+# -------------------------------
+# Page config
+# -------------------------------
 st.set_page_config(
     page_title="Crack Detection & Severity Analysis",
     layout="centered"
@@ -11,114 +13,117 @@ st.set_page_config(
 
 st.title("Crack Detection & Severity Analysis")
 
-# ------------------ IMAGE UPLOAD ------------------
+# -------------------------------
+# Severity logic (FINAL)
+# -------------------------------
+def calculate_severity(length_px, width_px):
+    score = (0.6 * length_px) + (0.4 * width_px)
+
+    if score < 300:
+        return "Low", score
+    elif score < 700:
+        return "Moderate", score
+    else:
+        return "Severe", score
+
+
+# -------------------------------
+# Image uploader
+# -------------------------------
 uploaded_file = st.file_uploader(
-    "Upload a concrete surface image",
+    "Upload crack / non-crack image",
     type=["jpg", "jpeg", "png"]
 )
 
-# ------------------ FUNCTIONS ------------------
+if uploaded_file:
+    image = Image.open(uploaded_file).convert("RGB")
+    img = np.array(image)
 
-def preprocess(gray):
-    gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(gray, 50, 150)
+    st.image(img, caption="Uploaded Image", use_column_width=True)
+
+    # -------------------------------
+    # Preprocessing
+    # -------------------------------
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    edges = cv2.Canny(blur, 50, 150)
+
     kernel = np.ones((3, 3), np.uint8)
     edges = cv2.dilate(edges, kernel, iterations=1)
-    return edges
 
-
-def detect_cracks(gray, original):
-    edges = preprocess(gray)
-
+    # -------------------------------
+    # Contour detection
+    # -------------------------------
     contours, _ = cv2.findContours(
         edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
-    crack_boxes = []
-    crack_lengths = []
+    crack_count = 0
+    total_length = 0
+    total_width = 0
+
+    output_img = img.copy()
 
     for cnt in contours:
-        area = cv2.contourArea(cnt)
         x, y, w, h = cv2.boundingRect(cnt)
-        length = max(w, h)
+        area = cv2.contourArea(cnt)
 
-        # --------- IMPORTANT FILTERS ----------
-        if area < 40:
+        # ❗ Filter noise
+        if area < 100 or h < 20:
             continue
 
-        if length < 60:
-            continue
+        crack_count += 1
+        length_px = max(w, h)
+        width_px = min(w, h)
 
-        aspect_ratio = length / (min(w, h) + 1)
-        if aspect_ratio < 2.0:
-            continue
+        total_length += length_px
+        total_width += width_px
 
-        crack_boxes.append((x, y, w, h))
-        crack_lengths.append(length)
-
-    output = cv2.cvtColor(original, cv2.COLOR_GRAY2BGR)
-
-    for i, (x, y, w, h) in enumerate(crack_boxes):
-        cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 255), 2)
-        cv2.putText(
-            output,
-            f"Crack {i+1}",
-            (x, y - 5),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
+        # Draw BOX (clean, panel-safe)
+        cv2.rectangle(
+            output_img,
+            (x, y),
+            (x + w, y + h),
             (0, 255, 255),
             2
         )
 
-    return output, crack_boxes, crack_lengths
-
-
-def calculate_severity(total_length):
-    if total_length < 150:
-        return "Low", ["Monitor periodically"]
-    elif total_length < 400:
-        return "Moderate", [
-            "Crack filling",
-            "Prevent water ingress"
-        ]
-    else:
-        return "High", [
-            "Structural inspection required",
-            "Immediate repair recommended"
-        ]
-
-
-# ------------------ MAIN LOGIC ------------------
-
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("L")
-    img_np = np.array(image)
-
-    st.image(image, caption="Uploaded Image", use_column_width=True)
-
-    annotated, boxes, lengths = detect_cracks(img_np, img_np)
-
-    if len(boxes) == 0:
-        st.warning("No structural cracks detected.")
-    else:
-        st.image(
-            annotated,
-            caption="Detected Crack Regions (Bounding Boxes)",
-            use_column_width=True
+        cv2.putText(
+            output_img,
+            f"{crack_count}",
+            (x, y - 5),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 0),
+            2
         )
 
+    # -------------------------------
+    # Results
+    # -------------------------------
+    st.subheader("Detected Crack Regions")
+    st.image(output_img, use_column_width=True)
+
+    if crack_count == 0:
+        st.success("No cracks detected in the image.")
+    else:
+        avg_width = total_width / crack_count
+        severity, score = calculate_severity(total_length, avg_width)
+
         st.subheader("📏 Extracted Crack Features")
+        st.markdown(f"- **Number of cracks:** {crack_count}")
+        st.markdown(f"- **Total crack length:** `{total_length}` pixels")
+        st.markdown(f"- **Average crack width:** `{round(avg_width, 2)}` pixels")
 
-        total_length = 0
-        for i, length in enumerate(lengths):
-            st.write(f"• Crack {i+1}: Length ≈ {length} pixels")
-            total_length += length
+        st.subheader("🔥 Severity Assessment")
+        st.markdown(f"### **Severity: {severity}**")
+        st.markdown(f"- Severity score: `{round(score, 2)}`")
 
-        severity, actions = calculate_severity(total_length)
-
-        st.subheader(f"🚦 Severity: {severity}")
-        st.write(f"**Total Crack Length:** {total_length} pixels")
-
-        st.subheader("🛠️ Suggested Actions")
-        for act in actions:
-            st.write(f"- {act}")
+        st.subheader("🛠 Suggested Action")
+        if severity == "Low":
+            st.info("Monitor periodically. Cosmetic repair if required.")
+        elif severity == "Moderate":
+            st.warning("Crack filling and sealing recommended to prevent water ingress.")
+        else:
+            st.error("Immediate structural inspection and professional repair required.")
