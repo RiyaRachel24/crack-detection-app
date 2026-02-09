@@ -120,4 +120,3 @@ if uploaded_file:
 
     st.markdown(f"## 🔥 Severity: **{severity}**")
     st.markdown(f"### 🛠 Suggested Action: {action}")
-
