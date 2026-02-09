@@ -69,7 +69,7 @@ def calculate_severity(boxes):
 # STREAMLIT UI
 # -------------------------------
 st.set_page_config(page_title="Crack Detection App", layout="wide")
-st.title("🧱 Crack Detection & Severity Analysis")
+st.title("Crack Detection & Severity Analysis")
 
 uploaded_file = st.file_uploader("Upload crack image", type=["jpg", "png", "jpeg"])
 
@@ -120,3 +120,4 @@ if uploaded_file:
 
     st.markdown(f"## 🔥 Severity: **{severity}**")
     st.markdown(f"### 🛠 Suggested Action: {action}")
+
