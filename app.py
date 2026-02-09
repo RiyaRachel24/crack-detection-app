@@ -1,87 +1,132 @@
 import streamlit as st
 import cv2
 import numpy as np
-from ultralytics import YOLO
 from PIL import Image
+from ultralytics import YOLO
 
+# ---------------- CONFIG ----------------
 st.set_page_config(page_title="Crack Detection App", layout="centered")
-st.title("Crack Detection & Severity Analysis")
+st.title("🧱 Crack Detection & Severity Analysis")
 
+# Load classification model
 @st.cache_resource
 def load_model():
-    return YOLO("best.pt")   # detection model ONLY
+    return YOLO("best.pt")  # YOLOv8 classification model
 
 model = load_model()
 
-uploaded_file = st.file_uploader(
-    "Upload an image",
-    type=["jpg", "jpeg", "png"]
-)
+# ---------------- HELPERS ----------------
+def classify_crack(img):
+    results = model(img)
+    probs = results[0].probs.data.cpu().numpy()
+    cls = np.argmax(probs)
+    conf = probs[cls]
+    return cls, conf  # 0 = crack, 1 = no crack (depends on training)
 
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    img = np.array(image)
-    draw = img.copy()
+def detect_cracks_opencv(gray):
+    blur = cv2.GaussianBlur(gray, (5,5), 0)
+    edges = cv2.Canny(blur, 50, 150)
 
-    results = model(img)[0]
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5,5))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    crack_lengths = []
-    crack_id = 0
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    if results.boxes is not None and len(results.boxes) > 0:
-        for box in results.boxes:
-            conf = float(box.conf[0])
+    crack_boxes = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 300:  # remove noise
+            continue
 
-            if conf < 0.25:   # LOWERED, SAFE
-                continue
+        x,y,w,h = cv2.boundingRect(cnt)
+        aspect_ratio = max(w,h) / (min(w,h) + 1e-5)
 
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            roi = img[y1:y2, x1:x2]
+        if aspect_ratio > 3:  # crack-like shape
+            crack_boxes.append((x,y,w,h))
 
-            if roi.size == 0:
-                continue
+    return crack_boxes
 
-            gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
-            edges = cv2.Canny(gray, 40, 120)
+def merge_boxes(boxes, threshold=20):
+    merged = []
+    for box in boxes:
+        x,y,w,h = box
+        merged_flag = False
+        for i,(mx,my,mw,mh) in enumerate(merged):
+            if abs(x-mx) < threshold and abs(y-my) < threshold:
+                nx = min(x,mx)
+                ny = min(y,my)
+                nw = max(x+w, mx+mw) - nx
+                nh = max(y+h, my+mh) - ny
+                merged[i] = (nx,ny,nw,nh)
+                merged_flag = True
+                break
+        if not merged_flag:
+            merged.append(box)
+    return merged
 
-            length = np.count_nonzero(edges)
-            crack_lengths.append(length)
-            crack_id += 1
-
-            cv2.rectangle(draw, (x1, y1), (x2, y2), (255, 255, 0), 2)
-            cv2.putText(
-                draw,
-                f"Crack {crack_id}",
-                (x1, y1 - 6),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 0),
-                2
-            )
-
-        st.image(draw, caption="Detected Crack Regions", use_column_width=True)
-
-        st.subheader("Extracted Crack Features")
-        total_length = sum(crack_lengths)
-
-        for i, l in enumerate(crack_lengths, 1):
-            st.write(f"Crack {i}: Length ≈ {l} pixels")
-
-        # Severity (DEFENSIBLE RULE-BASED)
-        if total_length < 300:
-            severity = "Low"
-            actions = ["Monitor periodically"]
-        elif total_length < 800:
-            severity = "Moderate"
-            actions = ["Crack filling", "Seal surface to prevent water ingress"]
-        else:
-            severity = "High"
-            actions = ["Structural inspection", "Immediate repair required"]
-
-        st.subheader(f"Severity: {severity}")
-        st.subheader("Suggested Action")
-        for a in actions:
-            st.write(f"• {a}")
-
+def severity_from_length(length):
+    if length < 150:
+        return "Low", ["Monitor periodically"]
+    elif length < 400:
+        return "Moderate", ["Crack filling", "Prevent water ingress"]
     else:
-        st.info("No cracks detected in the image.")
+        return "High", ["Structural inspection", "Immediate repair"]
+
+# ---------------- APP ----------------
+uploaded = st.file_uploader("Upload crack image", type=["jpg","png","jpeg"])
+
+if uploaded:
+    img = Image.open(uploaded).convert("RGB")
+    img_np = np.array(img)
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+
+    st.image(img, caption="Uploaded Image", use_column_width=True)
+
+    cls, conf = classify_crack(img_np)
+
+    if conf < 0.6:
+        st.warning("Low confidence prediction. Try a clearer image.")
+        st.stop()
+
+    if cls != 0:
+        st.success("✅ No crack detected in the image.")
+        st.stop()
+
+    # OpenCV crack detection
+    boxes = detect_cracks_opencv(gray)
+    boxes = merge_boxes(boxes)
+
+    if len(boxes) == 0:
+        st.warning("Crack present, but no significant crack regions extracted.")
+        st.stop()
+
+    annotated = img_np.copy()
+    lengths = []
+
+    for i,(x,y,w,h) in enumerate(boxes,1):
+        cv2.rectangle(annotated,(x,y),(x+w,y+h),(255,255,0),2)
+        length = max(w,h)
+        lengths.append(length)
+        cv2.putText(
+            annotated,
+            f"{i}",
+            (x, y-5),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255,255,0),
+            2
+        )
+
+    st.image(annotated, caption="Detected Crack Regions", use_column_width=True)
+
+    st.subheader("📏 Extracted Crack Features")
+    for i,l in enumerate(lengths,1):
+        st.write(f"Crack {i}: Length ≈ {l} pixels")
+
+    max_len = max(lengths)
+    severity, actions = severity_from_length(max_len)
+
+    st.subheader(f"🚦 Severity: {severity}")
+    st.subheader("🛠 Suggested Action")
+    for act in actions:
+        st.write(f"- {act}")
