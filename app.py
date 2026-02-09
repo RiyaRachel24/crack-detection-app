@@ -2,121 +2,118 @@ import streamlit as st
 import cv2
 import numpy as np
 from PIL import Image
+from ultralytics import YOLO
 
-# -------------------------------
-# CONFIG
-# -------------------------------
-MIN_WIDTH = 12        # filter tiny texture
-MIN_HEIGHT = 30
-MERGE_DISTANCE = 40   # pixels
-LOW_SEVERITY_LEN = 150
-MOD_SEVERITY_LEN = 350
-SEVERE_WIDTH = 20
+# ---------------- CONFIG ----------------
+st.set_page_config(page_title="Crack Detection App", layout="centered")
+st.title("Crack Detection & Severity Analysis")
 
-# -------------------------------
-# HELPERS
-# -------------------------------
-def preprocess(img_gray):
-    blur = cv2.GaussianBlur(img_gray, (5, 5), 0)
-    edges = cv2.Canny(blur, 50, 150)
+MODEL_PATH = "best.pt"
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    dilated = cv2.dilate(edges, kernel, iterations=2)
-    closed = cv2.morphologyEx(dilated, cv2.MORPH_CLOSE, kernel)
+MIN_AREA = 1200          # filters texture noise
+MIN_ASPECT_RATIO = 3.0   # crack must be elongated
+MAX_CRACKS = 2           # avoid over-counting
 
-    return closed
+# ----------------------------------------
 
+@st.cache_resource
+def load_model():
+    return YOLO(MODEL_PATH)
 
-def merge_boxes(boxes):
-    merged = []
+model = load_model()
 
-    for box in boxes:
-        x, y, w, h = box
-        merged_flag = False
+uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
 
-        for i, (mx, my, mw, mh) in enumerate(merged):
-            if abs(x - mx) < MERGE_DISTANCE and abs(y - my) < MERGE_DISTANCE:
-                nx = min(x, mx)
-                ny = min(y, my)
-                nw = max(x + w, mx + mw) - nx
-                nh = max(y + h, my + mh) - ny
-                merged[i] = (nx, ny, nw, nh)
-                merged_flag = True
-                break
-
-        if not merged_flag:
-            merged.append(box)
-
-    return merged
-
-
+# ----------------------------------------
 def calculate_severity(boxes):
     if not boxes:
         return "No Crack", "No action required"
 
     total_length = sum(max(w, h) for (_, _, w, h) in boxes)
-    max_width = max(min(w, h) for (_, _, w, h) in boxes)
+    avg_width = np.mean([min(w, h) for (_, _, w, h) in boxes])
 
-    if total_length > MOD_SEVERITY_LEN or max_width > SEVERE_WIDTH:
-        return "Severe", "Structural repair required"
-    elif total_length > LOW_SEVERITY_LEN:
+    if total_length > 350 and avg_width > 18:
+        return "Severe", "Immediate structural repair required"
+    elif total_length > 180:
         return "Moderate", "Crack filling and sealing recommended"
     else:
-        return "Low", "Surface monitoring suggested"
+        return "Low", "Monitor periodically"
 
-
-# -------------------------------
-# STREAMLIT UI
-# -------------------------------
-st.set_page_config(page_title="Crack Detection App", layout="wide")
-st.title("Crack Detection & Severity Analysis")
-
-uploaded_file = st.file_uploader("Upload crack image", type=["jpg", "png", "jpeg"])
-
+# ----------------------------------------
 if uploaded_file:
-    image = Image.open(uploaded_file).convert("L")
-    img = np.array(image)
-    output = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    image = Image.open(uploaded_file).convert("RGB")
+    img_np = np.array(image)
+    h, w, _ = img_np.shape
 
-    processed = preprocess(img)
+    st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    contours, _ = cv2.findContours(processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # ---------- YOLO DETECTION ----------
+    results = model(image, conf=0.4)
+
+    if len(results[0].boxes) == 0:
+        st.warning("No crack detected in the image.")
+        st.stop()
+
+    # ---------- PREPROCESS ----------
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blur, 60, 140)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    edges = cv2.dilate(edges, kernel, iterations=1)
+
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     boxes = []
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
 
-        # HARD FILTER → removes fake cracks
-        if w < MIN_WIDTH and h < MIN_HEIGHT:
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < MIN_AREA:
             continue
 
-        boxes.append((x, y, w, h))
+        x, y, bw, bh = cv2.boundingRect(cnt)
 
-    # MERGE fragmented boxes
-    boxes = merge_boxes(boxes)
+        aspect_ratio = max(bw, bh) / (min(bw, bh) + 1e-5)
+        if aspect_ratio < MIN_ASPECT_RATIO:
+            continue
 
-    # DRAW
-    for i, (x, y, w, h) in enumerate(boxes):
-        cv2.rectangle(output, (x, y), (x + w, y + h), (255, 255, 0), 2)
-        cv2.putText(output, f"Crack {i+1}", (x, y - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        boxes.append((x, y, bw, bh))
 
+    if not boxes:
+        st.warning("Crack present, but no significant crack regions extracted.")
+        st.stop()
+
+    # ---------- SORT & LIMIT ----------
+    boxes = sorted(boxes, key=lambda b: b[2] * b[3], reverse=True)
+    boxes = boxes[:MAX_CRACKS]
+
+    # ---------- DRAW BOXES ----------
+    draw_img = img_np.copy()
+    features = []
+
+    for i, (x, y, bw, bh) in enumerate(boxes):
+        cv2.rectangle(draw_img, (x, y), (x + bw, y + bh), (0, 255, 255), 3)
+        cv2.putText(
+            draw_img,
+            f"Crack {i+1}",
+            (x, y - 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 0),
+            2,
+        )
+        features.append(max(bw, bh))
+
+    st.image(draw_img, caption="Detected Crack Regions", use_column_width=True)
+
+    # ---------- FEATURES ----------
+    st.subheader("📏 Extracted Crack Features")
+    for i, length in enumerate(features):
+        st.write(f"Crack {i+1}: Length ≈ {int(length)} pixels")
+
+    # ---------- SEVERITY ----------
     severity, action = calculate_severity(boxes)
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.image(img, caption="Uploaded Image", use_column_width=True)
-
-    with col2:
-        st.image(output, caption="Detected Cracks", use_column_width=True)
-
-    st.markdown("### 📏 Extracted Crack Features")
-    if boxes:
-        for i, (_, _, w, h) in enumerate(boxes):
-            st.write(f"Crack {i+1} → Length ≈ {max(w, h)} px")
-    else:
-        st.info("No cracks detected.")
-
-    st.markdown(f"## 🔥 Severity: **{severity}**")
-    st.markdown(f"### 🛠 Suggested Action: {action}")
+    st.subheader(f"⚠️ Severity: {severity}")
+    st.write("**Suggested Action:**")
+    st.write(f"- {action}")
