@@ -4,36 +4,46 @@ import numpy as np
 from PIL import Image
 from ultralytics import YOLO
 
-# -------------------------------
-# Page Config
-# -------------------------------
+# -------------------- PAGE SETUP --------------------
 st.set_page_config(
     page_title="Crack Detection & Severity Analysis",
     layout="centered"
 )
 
-st.title("🛣️ Crack Detection & Severity Analysis")
+st.title("Crack Detection & Severity Analysis")
 
-# -------------------------------
-# Load YOLO Model (Classification)
-# -------------------------------
+# -------------------- LOAD MODEL --------------------
 @st.cache_resource
 def load_model():
     return YOLO("best.pt")  # your trained model
 
 model = load_model()
 
-# -------------------------------
-# Crack Detection using OpenCV
-# -------------------------------
-def detect_crack_boxes(gray):
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+# -------------------- SEVERITY LOGIC --------------------
+def get_severity(total_length):
+    if total_length < 150:
+        return "Low", ["Monitor periodically"]
+    elif total_length < 400:
+        return "Moderate", ["Crack filling", "Prevent water ingress"]
+    else:
+        return "High", ["Structural inspection", "Immediate repair recommended"]
 
+# -------------------- CRACK DETECTION (BOX-BASED) --------------------
+def detect_crack_boxes(gray):
+    """
+    Uses OpenCV to extract crack-like regions and returns bounding boxes
+    based on LENGTH (not area) to avoid missing thin cracks.
+    """
+
+    # Enhance contrast
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blur, 50, 150)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    # Strengthen cracks
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     dilated = cv2.dilate(edges, kernel, iterations=1)
 
+    # Find contours
     contours, _ = cv2.findContours(
         dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
@@ -42,38 +52,20 @@ def detect_crack_boxes(gray):
     lengths = []
 
     for cnt in contours:
-        area = cv2.contourArea(cnt)
         x, y, w, h = cv2.boundingRect(cnt)
 
-        # IMPORTANT FILTER (THIS FIXES FALSE CRACKS)
-        if area > 300 and h > 25:
+        crack_length = max(w, h)
+
+        # 🔑 KEY FIX: LENGTH-BASED FILTERING
+        if crack_length > 80:   # tuned for visible cracks
             boxes.append((x, y, w, h))
-            lengths.append(max(w, h))
+            lengths.append(crack_length)
 
     return boxes, lengths
 
-# -------------------------------
-# Severity Logic
-# -------------------------------
-def calculate_severity(total_length):
-    if total_length < 150:
-        return "Low", ["Monitor periodically"]
-    elif total_length < 400:
-        return "Moderate", [
-            "Crack filling",
-            "Prevent water ingress"
-        ]
-    else:
-        return "High", [
-            "Immediate repair required",
-            "Structural inspection recommended"
-        ]
-
-# -------------------------------
-# Image Upload
-# -------------------------------
+# -------------------- FILE UPLOAD --------------------
 uploaded_file = st.file_uploader(
-    "Upload crack image",
+    "Upload a crack image",
     type=["jpg", "jpeg", "png"]
 )
 
@@ -84,66 +76,71 @@ if uploaded_file:
 
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    # -------------------------------
-    # YOLO Prediction (Crack / No Crack)
-    # -------------------------------
-    yolo_result = model(image)[0]
-    probs = yolo_result.probs
+    # ---------------- YOLO PREDICTION ----------------
+    results = model(image)
 
-    crack_present = False
-    if probs is not None:
-        crack_present = probs.top1 == 0  # assumes class 0 = crack
+    pred_label = "No crack"
+    if results[0].probs is not None:
+        cls_id = int(results[0].probs.top1)
+        conf = float(results[0].probs.top1conf)
 
-    if not crack_present:
-        st.warning("No cracks detected by the model.")
-    else:
-        # -------------------------------
-        # OpenCV Crack Detection
-        # -------------------------------
+        if cls_id == 0 and conf > 0.4:
+            pred_label = "Crack"
+
+    # ---------------- CRACK PRESENT ----------------
+    if pred_label == "Crack":
         boxes, lengths = detect_crack_boxes(gray)
+        annotated = img_np.copy()
 
-        if len(boxes) == 0:
-            st.warning("Crack present, but no significant crack regions extracted.")
-        else:
-            vis = img_np.copy()
-            total_length = sum(lengths)
+        if boxes:
+            total_length = int(sum(lengths))
 
+            # Draw boxes
             for i, (x, y, w, h) in enumerate(boxes):
                 cv2.rectangle(
-                    vis, (x, y), (x + w, y + h),
-                    (255, 255, 0), 2
+                    annotated,
+                    (x, y),
+                    (x + w, y + h),
+                    (255, 255, 0),
+                    2
                 )
                 cv2.putText(
-                    vis,
-                    f"{i+1}",
-                    (x, y - 8),
+                    annotated,
+                    str(i + 1),
+                    (x, y - 5),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
+                    0.6,
                     (255, 255, 0),
                     2
                 )
 
             st.image(
-                vis,
-                caption="Detected Crack Regions (Bounding Boxes)",
+                annotated,
+                caption="Detected Crack Regions (Box-based)",
                 use_column_width=True
             )
 
-            # -------------------------------
-            # Features Display
-            # -------------------------------
+            # ---------------- FEATURES ----------------
             st.subheader("📏 Extracted Crack Features")
-            for i, length in enumerate(lengths):
-                st.write(f"Crack {i+1} → Length: {length} pixels")
+            for i, l in enumerate(lengths):
+                st.write(f"Crack {i+1}: Length = {int(l)} pixels")
 
-            # -------------------------------
-            # Severity
-            # -------------------------------
-            severity, actions = calculate_severity(total_length)
+            severity, actions = get_severity(total_length)
 
-            st.subheader(f"🚨 Severity: {severity}")
-            st.write(f"Total Crack Length: {total_length} pixels")
+            # ---------------- SEVERITY ----------------
+            st.subheader(f"🚦 Severity: {severity}")
+            st.write(f"Total crack length: **{total_length} pixels**")
 
-            st.subheader("🛠 Suggested Action")
-            for act in actions:
-                st.write(f"- {act}")
+            # ---------------- ACTIONS ----------------
+            st.subheader("🛠️ Suggested Action")
+            for a in actions:
+                st.write(f"- {a}")
+
+        else:
+            st.warning(
+                "Crack detected by model, but regions are too thin or fragmented to extract reliably."
+            )
+
+    # ---------------- NO CRACK ----------------
+    else:
+        st.success("No cracks detected in the image.")
