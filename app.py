@@ -2,128 +2,133 @@ import streamlit as st
 import cv2
 import numpy as np
 from PIL import Image
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
-import av
 
 # ---------------- PAGE ----------------
-st.set_page_config(page_title="Crack Detection (Live)", layout="wide")
-st.title("Crack Detection & Severity Analysis – Live Camera")
-
-st.info("Live camera stream using WebRTC. Capture frame to analyze cracks.")
-
-# ---------------- VIDEO PROCESSOR ----------------
-class VideoProcessor(VideoTransformerBase):
-    def __init__(self):
-        self.frame = None
-
-    def transform(self, frame: av.VideoFrame):
-        img = frame.to_ndarray(format="bgr24")
-        self.frame = img
-        return img
-
-# ---------------- START CAMERA ----------------
-ctx = webrtc_streamer(
-    key="live-cam",
-    video_processor_factory=VideoProcessor,
-    media_stream_constraints={"video": True, "audio": False},
-    async_processing=True,
+st.set_page_config(
+    page_title="Crack Detection & Severity Analysis",
+    layout="wide"
 )
 
-# ---------------- CAPTURE FRAME ----------------
-if ctx.video_processor and ctx.video_processor.frame is not None:
-    if st.button("📸 Capture & Analyze Frame"):
-        img = ctx.video_processor.frame.copy()
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+st.title("Crack Detection & Severity Analysis")
 
-        # ---------------- CRACK DETECTION ----------------
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
-        edges = cv2.Canny(blur, 50, 150)
+st.markdown("Choose **Upload Image** or **Click Picture** using your phone camera.")
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        dilated = cv2.dilate(edges, kernel, iterations=1)
+# ---------------- INPUT OPTIONS ----------------
+col1, col2 = st.columns(2)
 
-        contours, _ = cv2.findContours(
-            dilated,
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_SIMPLE
-        )
+with col1:
+    uploaded_file = st.file_uploader(
+        "📂 Upload concrete surface image",
+        type=["jpg", "jpeg", "png"]
+    )
 
-        H, W = gray.shape
-        cracks = []
-        lengths = []
+with col2:
+    camera_file = st.camera_input("📸 Click picture using camera")
 
-        for cnt in contours:
-            x, y, w, h = cv2.boundingRect(cnt)
-            length = max(w, h)
+# ---------------- SELECT IMAGE ----------------
+image = None
 
-            # STRICT FILTERS (THIS FIXES FALSE CRACKS)
-            if length < 80:
-                continue
-            if w > 0.7 * W:
-                continue
+if uploaded_file is not None:
+    image = Image.open(uploaded_file).convert("RGB")
 
-            cracks.append((x, y, w, h, length))
-            lengths.append(length)
+elif camera_file is not None:
+    image = Image.open(camera_file).convert("RGB")
 
-        if len(cracks) == 0:
-            st.error("❌ No significant cracks detected.")
-            st.stop()
+if image is None:
+    st.warning("Please upload an image or click a picture.")
+    st.stop()
 
-        # ---------------- DRAW BOXES ----------------
-        annotated = img.copy()
-        for i, (x, y, w, h, l) in enumerate(cracks, start=1):
-            cv2.rectangle(
-                annotated,
-                (x, y),
-                (x + w, y + h),
-                (0, 255, 255),
-                3
-            )
-            cv2.putText(
-                annotated,
-                str(i),
-                (x, y - 8),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 255),
-                2
-            )
+# ---------------- SHOW IMAGE ----------------
+img = np.array(image)
+gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
-        # ---------------- DISPLAY ----------------
-        col1, col2 = st.columns(2)
+st.subheader("📷 Input Image")
+st.image(image, use_column_width=True)
 
-        with col1:
-            st.subheader("Captured Frame")
-            st.image(img, channels="BGR", use_column_width=True)
+# ---------------- CRACK DETECTION ----------------
+blur = cv2.GaussianBlur(gray, (5, 5), 0)
+edges = cv2.Canny(blur, 50, 150)
 
-        with col2:
-            st.subheader("Detected Cracks")
-            st.image(annotated, channels="BGR", use_column_width=True)
+kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+dilated = cv2.dilate(edges, kernel, iterations=1)
 
-        # ---------------- FEATURES ----------------
-        st.subheader("📏 Extracted Crack Features")
-        for i, l in enumerate(lengths, start=1):
-            st.write(f"• Crack {i}: Length ≈ **{int(l)} pixels**")
+contours, _ = cv2.findContours(
+    dilated,
+    cv2.RETR_EXTERNAL,
+    cv2.CHAIN_APPROX_SIMPLE
+)
 
-        # ---------------- SEVERITY ----------------
-        max_len = max(lengths)
-        count = len(lengths)
+H, W = gray.shape
+cracks = []
+lengths = []
 
-        if max_len < 150 and count == 1:
-            severity = "Low"
-        elif max_len < 350 and count <= 2:
-            severity = "Moderate"
-        else:
-            severity = "Severe"
+for cnt in contours:
+    x, y, w, h = cv2.boundingRect(cnt)
+    length = max(w, h)
 
-        st.markdown("---")
-        st.subheader(f"🚦 Severity: **{severity}**")
+    # STRONG FILTERS (reduce false cracks)
+    if length < 80:
+        continue
+    if w > 0.7 * W:
+        continue
 
-        # ---------------- ACTION ----------------
-        st.subheader("🛠 Suggested Action")
-        if severity == "Low":
-            st.write("• Surface sealing\n• Periodic monitoring")
-        elif severity == "Moderate":
-            st.write("• Crack filling\n• Waterproof coating")
-        else:
-            st.write("• Structural inspection\n• Professional repair required")
+    cracks.append((x, y, w, h, length))
+    lengths.append(length)
+
+# ---------------- NO CRACK CASE ----------------
+if len(cracks) == 0:
+    st.error("❌ No significant cracks detected.")
+    st.stop()
+
+# ---------------- DRAW BOXES ----------------
+annotated = img.copy()
+
+for i, (x, y, w, h, l) in enumerate(cracks, start=1):
+    cv2.rectangle(
+        annotated,
+        (x, y),
+        (x + w, y + h),
+        (0, 255, 255),
+        3
+    )
+    cv2.putText(
+        annotated,
+        str(i),
+        (x, y - 8),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 255, 255),
+        2
+    )
+
+st.subheader("🟨 Detected Cracks")
+st.image(annotated, use_column_width=True)
+
+# ---------------- FEATURES ----------------
+st.subheader("📏 Extracted Crack Features")
+for i, l in enumerate(lengths, start=1):
+    st.write(f"• Crack {i}: Length ≈ **{int(l)} pixels**")
+
+# ---------------- SEVERITY ----------------
+max_len = max(lengths)
+count = len(lengths)
+
+if max_len < 150 and count == 1:
+    severity = "Low"
+elif max_len < 350 and count <= 2:
+    severity = "Moderate"
+else:
+    severity = "Severe"
+
+st.markdown("---")
+st.subheader(f"🚦 Severity: **{severity}**")
+
+# ---------------- ACTION ----------------
+st.subheader("🛠 Suggested Action")
+
+if severity == "Low":
+    st.write("• Surface sealing\n• Periodic monitoring")
+elif severity == "Moderate":
+    st.write("• Crack filling\n• Waterproof coating")
+else:
+    st.write("• Structural inspection\n• Professional repair required")
