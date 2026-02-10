@@ -105,3 +105,4 @@ elif severity == "Moderate":
     st.write("• Crack filling\n• Waterproof coating")
 else:
     st.write("• Structural inspection\n• Professional repair required")
+
