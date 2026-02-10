@@ -5,7 +5,7 @@ from PIL import Image
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="Crack Detection", layout="wide")
-st.title("🧱 Crack Detection & Severity Analysis")
+st.title("Crack Detection & Severity Analysis")
 
 # ---------------- FILE UPLOAD ----------------
 uploaded_file = st.file_uploader(
@@ -122,3 +122,4 @@ elif severity == "Moderate":
     st.write("• Crack filling\n• Waterproof coating")
 else:
     st.write("• Structural inspection\n• Professional repair required")
+
