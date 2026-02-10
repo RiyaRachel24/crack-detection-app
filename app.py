@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-# ---------------- PAGE CONFIG ----------------
+# ---------------- PAGE ----------------
 st.set_page_config(
     page_title="Crack Detection & Severity Analysis",
     layout="wide"
@@ -12,26 +12,39 @@ st.set_page_config(
 st.title("Crack Detection & Severity Analysis")
 
 st.markdown(
-    """
-📌 **Note:**  
-On mobile devices, tap **Browse files → Camera** to capture a live image.
+"""
+📌 **Input Options**
+- Upload an image **OR**
+- Capture image directly using device camera
 """
 )
 
-# ---------------- IMAGE INPUT ----------------
-uploaded_file = st.file_uploader(
-    "Upload concrete surface image",
-    type=["jpg", "jpeg", "png"]
-)
+# ---------------- INPUT METHOD ----------------
+col_input1, col_input2 = st.columns(2)
 
-if uploaded_file is None:
+image = None
+
+with col_input1:
+    uploaded_file = st.file_uploader(
+        "📁 Upload concrete image",
+        type=["jpg", "jpeg", "png"]
+    )
+    if uploaded_file:
+        image = Image.open(uploaded_file).convert("RGB")
+
+with col_input2:
+    camera_photo = st.camera_input("📷 Capture image")
+    if camera_photo:
+        image = Image.open(camera_photo).convert("RGB")
+
+if image is None:
     st.stop()
 
-image = Image.open(uploaded_file).convert("RGB")
+# ---------------- IMAGE PREP ----------------
 img = np.array(image)
 gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
-# ---------------- CRACK DETECTION (STABLE OPENCV) ----------------
+# ---------------- CRACK DETECTION ----------------
 blur = cv2.GaussianBlur(gray, (5, 5), 0)
 edges = cv2.Canny(blur, 60, 160)
 
@@ -47,14 +60,13 @@ cracks = []
 
 for cnt in contours:
     x, y, w, h = cv2.boundingRect(cnt)
-
     length = max(w, h)
     width_px = min(w, h)
 
-    # ---- STRICT FILTERS (CRITICAL) ----
-    if length < 80:        # remove noise
+    # STRICT FILTERING
+    if length < 80:
         continue
-    if width_px > 0.25 * W:  # remove blobs / patches
+    if width_px > 0.25 * W:
         continue
 
     cracks.append((x, y, w, h, length, width_px))
@@ -65,7 +77,7 @@ if len(cracks) == 0:
     st.image(image, caption="Uploaded Image", use_column_width=True)
     st.stop()
 
-# ---------------- VISUALIZATION ----------------
+# ---------------- DISPLAY ----------------
 col1, col2 = st.columns(2)
 
 with col1:
@@ -87,7 +99,6 @@ with col2:
             (0, 255, 255),
             3
         )
-
         cv2.putText(
             annotated,
             f"{i}",
@@ -98,14 +109,13 @@ with col2:
             2
         )
 
-        # ---- WIDTH ESTIMATION (PIXEL → mm) ----
-        pixel_to_mm = 0.02   # assumed scale (mention in viva)
+        pixel_to_mm = 0.02
         widths_mm.append(width_px * pixel_to_mm)
         lengths_px.append(length)
 
     st.image(annotated, use_column_width=True)
 
-# ---------------- FEATURE DISPLAY ----------------
+# ---------------- FEATURES ----------------
 st.subheader("📏 Extracted Crack Features")
 
 for i, (l, w) in enumerate(zip(lengths_px, widths_mm), start=1):
@@ -113,10 +123,8 @@ for i, (l, w) in enumerate(zip(lengths_px, widths_mm), start=1):
         f"• Crack {i}: Length ≈ **{int(l)} px**, Width ≈ **{w:.2f} mm**"
     )
 
-# ---------------- SEVERITY (WIDTH-BASED FORMULA) ----------------
+# ---------------- SEVERITY ----------------
 max_width = max(widths_mm)
-
-# Severity Index
 SI = max_width / 0.30
 
 if SI <= 0.33:
@@ -130,7 +138,7 @@ st.markdown("---")
 st.subheader(f"🚦 Severity: **{severity}**")
 st.write(f"Severity Index (SI) = **{SI:.2f}**")
 
-# ---------------- ACTION SUGGESTION ----------------
+# ---------------- ACTION ----------------
 st.subheader("🛠 Suggested Action")
 
 if severity.startswith("🟢"):
