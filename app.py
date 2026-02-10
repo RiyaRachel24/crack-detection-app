@@ -2,60 +2,25 @@ import streamlit as st
 import cv2
 import numpy as np
 from PIL import Image
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
-import av
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="Crack Detection & Severity Analysis", layout="wide")
 st.title("🧱 Crack Detection & Severity Analysis")
 
-# ---------------- MODE SELECTION ----------------
-mode = st.radio(
-    "Select Input Mode",
-    ["Upload / Capture Image", "Live Camera"]
+st.info("📱 Tip: Open this app on your phone to capture a live image using the camera.")
+
+# ---------------- IMAGE INPUT (BROWSE + CAMERA) ----------------
+uploaded_file = st.file_uploader(
+    "Upload or capture crack image",
+    type=["jpg", "jpeg", "png"]
 )
 
-# ---------------- LIVE CAMERA CLASS ----------------
-class VideoProcessor(VideoTransformerBase):
-    def __init__(self):
-        self.frame = None
+if uploaded_file is None:
+    st.stop()
 
-    def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        self.frame = img
-        return img
-
-# ---------------- INPUT HANDLING ----------------
-captured_image = None
-
-if mode == "Upload / Capture Image":
-    uploaded_file = st.file_uploader(
-        "Upload or capture concrete surface image",
-        type=["jpg", "jpeg", "png"]
-    )
-    if uploaded_file is None:
-        st.stop()
-
-    image = Image.open(uploaded_file).convert("RGB")
-    img = np.array(image)
-
-else:
-    st.info("📸 Live camera preview. Click 'Capture Frame' to analyze.")
-    ctx = webrtc_streamer(
-        key="live_cam",
-        video_processor_factory=VideoProcessor,
-        media_stream_constraints={"video": True, "audio": False},
-        async_processing=True,
-    )
-
-    if ctx.video_processor and st.button("📷 Capture Frame"):
-        captured_image = ctx.video_processor.frame
-
-    if captured_image is None:
-        st.stop()
-
-    img = captured_image
-    image = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+# ---------------- LOAD IMAGE ----------------
+image = Image.open(uploaded_file).convert("RGB")
+img = np.array(image)
 
 # ---------------- PREPROCESS ----------------
 gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -81,15 +46,16 @@ contours, _ = cv2.findContours(
 H, W = gray.shape
 cracks = []
 
-# Pixel → mm scale (dataset-based approximation)
+# Pixel → mm conversion (dataset-based approximation)
 PIXEL_TO_MM = 0.05
 
-# ---------------- FILTER & FEATURES ----------------
+# ---------------- FILTER & FEATURE EXTRACTION ----------------
 for cnt in contours:
     x, y, w, h = cv2.boundingRect(cnt)
     length_px = max(w, h)
     width_px = min(w, h)
 
+    # Noise removal
     if length_px < 80:
         continue
     if width_px < 2:
@@ -148,10 +114,10 @@ for i, (_, _, _, _, l_px, w_px, w_mm) in enumerate(cracks, start=1):
         f"• Crack {i}: Length ≈ **{l_px} px**, Width ≈ **{round(w_mm, 3)} mm**"
     )
 
-# ---------------- SEVERITY INDEX ----------------
+# ---------------- SEVERITY INDEX (YOUR FORMULA) ----------------
 max_width_mm = max(widths_mm)
 
-# YOUR FORMULA
+# Crack Severity Index
 SI = max_width_mm / 0.30
 
 # ---------------- CLASSIFICATION ----------------
