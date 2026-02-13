@@ -3,16 +3,12 @@ import cv2
 import numpy as np
 from PIL import Image
 
-# ---------------- PAGE CONFIG ----------------
+# ---------------- PAGE ----------------
 st.set_page_config(page_title="Crack Detection", layout="centered")
 st.title("Crack Detection & Severity Analysis")
-st.caption("Upload concrete surface images only")
 
 # ---------------- UPLOAD ----------------
-file = st.file_uploader(
-    "Upload concrete beam image",
-    type=["jpg", "jpeg", "png"]
-)
+file = st.file_uploader("Upload image", type=["jpg", "jpeg", "png"])
 
 if file is None:
     st.stop()
@@ -21,23 +17,6 @@ image = Image.open(file).convert("RGB")
 img = np.array(image)
 gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
-# ---------------- SURFACE VALIDATION ----------------
-def is_concrete_surface(gray_img):
-    std_dev = np.std(gray_img)
-    mean_val = np.mean(gray_img)
-
-    # Concrete typically has moderate texture variance
-    if std_dev < 18:
-        return False
-    if mean_val < 40 or mean_val > 220:
-        return False
-
-    return True
-
-if not is_concrete_surface(gray):
-    st.warning("⚠ Uploaded image does not appear to be a concrete surface.")
-    st.stop()
-
 # ---------------- CRACK DETECTION ----------------
 blur = cv2.GaussianBlur(gray, (5, 5), 0)
 edges = cv2.Canny(blur, 50, 150)
@@ -45,115 +24,86 @@ edges = cv2.Canny(blur, 50, 150)
 kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 dilated = cv2.dilate(edges, kernel, iterations=1)
 
-contours, _ = cv2.findContours(
-    dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-)
+contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
 H, W = gray.shape
 cracks = []
 
 for cnt in contours:
     x, y, w, h = cv2.boundingRect(cnt)
-
     length = max(w, h)
-    width_pixels = min(w, h)
+    width = min(w, h)
 
-    aspect_ratio = length / (width_pixels + 1e-5)
-
-    # STRICT FILTERS
+    # basic filtering
     if length < 80:
         continue
 
-    if aspect_ratio < 3:   # must be long & thin
-        continue
-
-    if w > 0.8 * W:   # remove large texture blobs
-        continue
-
-    cracks.append((x, y, w, h, length, width_pixels))
+    cracks.append((x, y, w, h, length, width))
 
 # ---------------- NO CRACK ----------------
 if len(cracks) == 0:
-    st.error("❌ No significant cracks detected.")
+    st.error("No cracks detected.")
+    st.image(image, caption="Uploaded Image", use_column_width=True)
     st.stop()
 
-# ---------------- DRAW LAYOUT ----------------
+# ---------------- DISPLAY ----------------
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("Original Image")
+    st.subheader("Uploaded Image")
     st.image(image, use_column_width=True)
 
 with col2:
     st.subheader("Detected Cracks")
     annotated = img.copy()
 
-    for i, (x, y, w, h, length, width_pixels) in enumerate(cracks, start=1):
-        cv2.rectangle(
-            annotated,
-            (x, y),
-            (x + w, y + h),
-            (0, 255, 255),
-            3
-        )
-        cv2.putText(
-            annotated,
-            f"{i}",
-            (x, y - 8),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 255),
-            2
-        )
+    lengths = []
+    widths = []
+
+    for i, (x, y, w, h, length, width) in enumerate(cracks, start=1):
+        cv2.rectangle(annotated, (x, y), (x+w, y+h), (0,255,255), 3)
+        cv2.putText(annotated, str(i), (x, y-5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2)
+
+        lengths.append(length)
+        widths.append(width)
 
     st.image(annotated, use_column_width=True)
 
-# ---------------- FEATURE EXTRACTION ----------------
+# ---------------- FEATURES ----------------
 st.subheader("Extracted Crack Features")
 
-width_mm_list = []
+for i, (l, w) in enumerate(zip(lengths, widths), start=1):
+    st.write(f"Crack {i}: Length ≈ {int(l)} px | Width ≈ {int(w)} px")
 
-for i, (x, y, w, h, length, width_pixels) in enumerate(cracks, start=1):
+# ---------------- SEVERITY USING WIDTH ----------------
+max_width_px = max(widths)
 
-    # Pixel-to-mm assumption (example scaling)
-    pixel_to_mm = 0.02
-    width_mm = width_pixels * pixel_to_mm
-    width_mm_list.append(width_mm)
+# pixel to mm conversion (assumed calibration)
+pixel_to_mm = 0.05
+max_width_mm = max_width_px * pixel_to_mm
 
-    st.write(
-        f"• Crack {i}: Length ≈ {int(length)} px | "
-        f"Width ≈ {width_mm:.3f} mm"
-    )
+# Severity Index formula (Eurocode limit 0.30 mm)
+SI = max_width_mm / 0.30
 
-# ---------------- SEVERITY CALCULATION ----------------
-max_width = max(width_mm_list)
-
-# Severity Index
-SI = max_width / 0.30
-
-# Classification
 if SI <= 0.33:
     severity = "Minor"
-elif SI <= 1.00:
+elif SI <= 1.0:
     severity = "Moderate"
 else:
     severity = "Severe"
 
 st.markdown("---")
 st.subheader(f"Severity: {severity}")
-st.write(f"Severity Index (SI) = {SI:.2f}")
+st.write(f"Max width ≈ {max_width_mm:.3f} mm")
+st.write(f"Severity Index = {SI:.2f}")
 
-# ---------------- SUGGESTED ACTION ----------------
+# ---------------- ACTION ----------------
 st.subheader("Suggested Action")
 
 if severity == "Minor":
-    st.write("• Surface sealing")
-    st.write("• Routine monitoring")
-
+    st.write("• Surface sealing\n• Monitor crack")
 elif severity == "Moderate":
-    st.write("• Crack filling")
-    st.write("• Waterproof coating")
-
+    st.write("• Crack filling\n• Waterproof coating")
 else:
-    st.write("• Structural inspection required")
-    st.write("• Professional repair recommended")
+    st.write("• Structural inspection required\n• Immediate repair")
