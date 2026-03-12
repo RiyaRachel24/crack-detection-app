@@ -3,130 +3,122 @@ import cv2
 import numpy as np
 from PIL import Image
 
-# ---------------- PAGE ----------------
-st.set_page_config(page_title="Crack Detection", layout="centered")
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(page_title="Crack Detection", layout="wide")
 st.title("Crack Detection & Severity Analysis")
 
 # ---------------- FILE UPLOAD ----------------
-file = st.file_uploader("Upload image", type=["jpg","jpeg","png"])
+uploaded_file = st.file_uploader(
+    "Upload concrete surface image",
+    type=["jpg", "jpeg", "png"]
+)
 
-if file is None:
+if uploaded_file is None:
     st.stop()
 
 # ---------------- LOAD IMAGE ----------------
-image = Image.open(file).convert("RGB")
+image = Image.open(uploaded_file).convert("RGB")
 img = np.array(image)
-
 gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
-# ---------------- CONTRAST ----------------
-clahe = cv2.createCLAHE(clipLimit=3.0,tileGridSize=(8,8))
-gray = clahe.apply(gray)
+# ---------------- PREPROCESS ----------------
+blur = cv2.GaussianBlur(gray, (5, 5), 0)
+edges = cv2.Canny(blur, 60, 160)
 
-# ---------------- SMOOTH ----------------
-blur = cv2.GaussianBlur(gray,(5,5),0)
+kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+dilated = cv2.dilate(edges, kernel, iterations=1)
 
-# ---------------- EXTRACT DARK CRACKS ----------------
-kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(25,25))
-blackhat = cv2.morphologyEx(blur, cv2.MORPH_BLACKHAT, kernel)
+contours, _ = cv2.findContours(
+    dilated,
+    cv2.RETR_EXTERNAL,
+    cv2.CHAIN_APPROX_SIMPLE
+)
 
-# ---------------- THRESHOLD ----------------
-_,thresh = cv2.threshold(blackhat,20,255,cv2.THRESH_BINARY)
+H, W = gray.shape
+cracks = []
+lengths = []
 
-# ---------------- CONNECT CRACK ----------------
-kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(7,7))
-dilate = cv2.dilate(thresh,kernel,iterations=2)
-
-# ---------------- REMOVE NOISE ----------------
-clean = cv2.morphologyEx(dilate, cv2.MORPH_OPEN, np.ones((3,3),np.uint8))
-
-# ---------------- FIND CONTOURS ----------------
-contours,_ = cv2.findContours(clean,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-
-largest=None
-largest_area=0
-
+# ---------------- FILTER CONTOURS ----------------
 for cnt in contours:
-
+    x, y, w, h = cv2.boundingRect(cnt)
+    length = max(w, h)
     area = cv2.contourArea(cnt)
 
-    if area > largest_area:
-        largest_area = area
-        largest = cnt
+    # IMPORTANT FILTERS (review-safe)
+    if length < 80:        # remove tiny noise
+        continue
+    if area < 100:         # remove texture
+        continue
+    if w > 0.8 * W:        # remove full-width edges
+        continue
 
-# ---------------- NO CRACK ----------------
-if largest is None:
-
-    st.error("No cracks detected")
-
-    col1,col2 = st.columns(2)
-
-    with col1:
-        st.subheader("Original Image")
-        st.image(image,use_column_width=True)
-
-    with col2:
-        st.subheader("Processed")
-        st.image(clean,use_column_width=True)
-
-    st.stop()
-
-# ---------------- BOUNDING BOX ----------------
-rect = cv2.minAreaRect(largest)
-box = cv2.boxPoints(rect)
-box = np.int32(box)
-
-annotated = img.copy()
-cv2.drawContours(annotated,[box],0,(0,255,255),3)
+    cracks.append((x, y, w, h))
+    lengths.append(length)
 
 # ---------------- DISPLAY ----------------
-col1,col2 = st.columns(2)
+col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Original Image")
-    st.image(image,use_column_width=True)
+    st.image(image, use_column_width=True)
 
 with col2:
-    st.subheader("Detected Crack")
-    st.image(annotated,use_column_width=True)
+    st.subheader("Detected Cracks")
+    annotated = img.copy()
 
-# ---------------- WIDTH ----------------
-width_pixels = int(min(rect[1]))
+    for i, (x, y, w, h) in enumerate(cracks, start=1):
+        cv2.rectangle(
+            annotated,
+            (x, y),
+            (x + w, y + h),
+            (0, 255, 255),
+            3
+        )
+        cv2.putText(
+            annotated,
+            f"{i}",
+            (x, y - 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 255),
+            2
+        )
 
-PIXEL_TO_MM = 0.02
-width_mm = width_pixels * PIXEL_TO_MM
+    st.image(annotated, use_column_width=True)
 
-SI = width_mm / 0.30
+# ---------------- NO CRACK CASE ----------------
+st.markdown("---")
 
-if SI <= 0.33:
-    severity = "🟢 Minor"
-elif SI <= 1.0:
-    severity = "🟡 Moderate"
+if len(cracks) == 0:
+    st.error("❌ No cracks detected in the image.")
+    st.stop()
+
+# ---------------- FEATURES ----------------
+st.subheader("📏 Extracted Crack Features")
+for i, l in enumerate(lengths, start=1):
+    st.write(f"• Crack {i}: Length ≈ **{int(l)} pixels**")
+
+max_len = max(lengths)
+count = len(lengths)
+
+# ---------------- SEVERITY LOGIC ----------------
+if max_len < 150 and count == 1:
+    severity = "Low"
+elif max_len < 350 and count <= 2:
+    severity = "Moderate"
 else:
-    severity = "🔴 Severe"
+    severity = "Severe"
 
-# ---------------- RESULTS ----------------
+# ---------------- RESULT ----------------
 st.markdown("---")
-st.subheader("Crack Measurements")
-
-st.write(f"Crack width (pixels): {width_pixels}")
-st.write(f"Estimated crack width (mm): {width_mm:.3f}")
-st.write(f"Severity Index: {SI:.2f}")
-
-st.markdown("---")
-st.subheader(f"Severity: {severity}")
+st.subheader(f"🚦 Severity: **{severity}**")
 
 # ---------------- ACTION ----------------
-st.subheader("Suggested Action")
+st.subheader("🛠 Suggested Action")
 
-if SI <= 0.33:
-    st.write("• Monitor periodically")
-    st.write("• Surface sealing")
-
-elif SI <= 1.0:
-    st.write("• Crack filling")
-    st.write("• Waterproof coating")
-
+if severity == "Low":
+    st.write("• Surface sealing\n• Periodic monitoring")
+elif severity == "Moderate":
+    st.write("• Crack filling\n• Waterproof coating")
 else:
-    st.write("• Structural inspection required")
-    st.write("• Professional repair recommended")
+    st.write("• Structural inspection\n• Professional repair required")
