@@ -19,7 +19,7 @@ img = np.array(image)
 
 gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
-# Improve crack visibility
+# Enhance contrast
 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
 gray = clahe.apply(gray)
 
@@ -27,25 +27,12 @@ gray = clahe.apply(gray)
 
 blur = cv2.GaussianBlur(gray,(5,5),0)
 
-# Adaptive threshold for uneven lighting
-thresh = cv2.adaptiveThreshold(
-    blur,
-    255,
-    cv2.ADAPTIVE_THRESH_MEAN_C,
-    cv2.THRESH_BINARY_INV,
-    15,
-    3
-)
+edges = cv2.Canny(blur,40,120)
 
-# Remove noise
 kernel = np.ones((3,3),np.uint8)
-opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+dilated = cv2.dilate(edges,kernel,iterations=1)
 
-# Strengthen crack lines
-dilated = cv2.dilate(opening, kernel, iterations=1)
-
-# Find contours
-contours,_ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+contours,_ = cv2.findContours(dilated,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
 
 valid_cracks=[]
 widths=[]
@@ -54,8 +41,7 @@ for cnt in contours:
 
     area = cv2.contourArea(cnt)
 
-    # Remove tiny noise
-    if area < 150:
+    if area < 50:
         continue
 
     x,y,w,h = cv2.boundingRect(cnt)
@@ -65,25 +51,32 @@ for cnt in contours:
 
     aspect_ratio = length/(width+1)
 
-    # Crack must be long
-    if length < 50:
+    # Crack must be somewhat elongated
+    if aspect_ratio < 1.5:
         continue
 
-    # Crack must be thin
-    if width > 15:
-        continue
-
-    # Crack must be elongated
-    if aspect_ratio < 3:
+    # Avoid very large blobs
+    if width > 30:
         continue
 
     valid_cracks.append((x,y,w,h))
     widths.append(width)
 
 # ---------------- NO CRACK ----------------
-if len(valid_cracks) == 0:
+if len(valid_cracks)==0:
+
     st.error("No cracks detected")
-    st.image(image, use_column_width=True)
+
+    col1,col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Original Image")
+        st.image(image,use_column_width=True)
+
+    with col2:
+        st.subheader("Edge Detection")
+        st.image(edges,use_column_width=True)
+
     st.stop()
 
 # ---------------- DRAW RESULTS ----------------
@@ -92,7 +85,7 @@ col1,col2 = st.columns(2)
 
 with col1:
     st.subheader("Original Image")
-    st.image(image, use_column_width=True)
+    st.image(image,use_column_width=True)
 
 with col2:
     st.subheader("Detected Cracks")
@@ -101,23 +94,22 @@ with col2:
 
     for (x,y,w,h) in valid_cracks:
 
-        pad = 5
+        pad = 3
 
         cv2.rectangle(
             annotated,
-            (x-pad, y-pad),
-            (x+w+pad, y+h+pad),
+            (x-pad,y-pad),
+            (x+w+pad,y+h+pad),
             (0,255,255),
             2
         )
 
-    st.image(annotated, use_column_width=True)
+    st.image(annotated,use_column_width=True)
 
 # ---------------- WIDTH CALCULATION ----------------
 
 max_width_pixels = max(widths)
 
-# Pixel to mm conversion
 PIXEL_TO_MM = 0.01
 max_width_mm = max_width_pixels * PIXEL_TO_MM
 
