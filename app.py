@@ -23,54 +23,59 @@ gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
 gray = clahe.apply(gray)
 
-# ---------------- BLUR ----------------
-blur = cv2.GaussianBlur(gray,(5,5),0)
+# ---------------- DENOISE (important for concrete texture) ----------------
+blur = cv2.bilateralFilter(gray, 9, 75, 75)
 
-# ---------------- EDGE DETECTION ----------------
-edges = cv2.Canny(blur,30,100)
+# ---------------- ADAPTIVE THRESHOLD ----------------
+thresh = cv2.adaptiveThreshold(
+    blur,
+    255,
+    cv2.ADAPTIVE_THRESH_MEAN_C,
+    cv2.THRESH_BINARY_INV,
+    15,
+    3
+)
 
 # ---------------- MORPHOLOGY ----------------
 kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(5,5))
 
-connected = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
-connected = cv2.morphologyEx(connected, cv2.MORPH_OPEN, np.ones((3,3),np.uint8))
+morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+morph = cv2.morphologyEx(morph, cv2.MORPH_OPEN, np.ones((3,3),np.uint8))
 
 # ---------------- FIND CONTOURS ----------------
-contours,_ = cv2.findContours(connected,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+contours,_ = cv2.findContours(morph,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
 
 valid_cracks=[]
 widths=[]
 
-h_img, w_img = connected.shape
+h_img, w_img = morph.shape
 
-# ---------------- FILTER CONTOURS ----------------
+# ---------------- FILTER CRACKS ----------------
 for cnt in contours:
-
-    x,y,w,h = cv2.boundingRect(cnt)
-
-    # Ignore contours touching the border
-    if x <= 5 or y <= 5 or x+w >= w_img-5 or y+h >= h_img-5:
-        continue
 
     area = cv2.contourArea(cnt)
 
-    if area < 40:
+    if area < 80:
         continue
 
-    rect = cv2.minAreaRect(cnt)
-    (cx,cy),(rw,rh),angle = rect
+    x,y,w,h = cv2.boundingRect(cnt)
 
-    length = max(rw,rh)
-    width = min(rw,rh)
+    # ignore contours touching border
+    if x <= 5 or y <= 5 or x+w >= w_img-5 or y+h >= h_img-5:
+        continue
 
-    if length < 30:
+    length = max(w,h)
+    width = min(w,h)
+
+    if length < 40:
         continue
 
     aspect_ratio = length/(width+1)
 
-    if aspect_ratio < 3:
+    if aspect_ratio < 2:
         continue
 
+    rect = cv2.minAreaRect(cnt)
     box = cv2.boxPoints(rect)
     box = np.int32(box)
 
@@ -89,13 +94,12 @@ if len(valid_cracks)==0:
         st.image(image,use_column_width=True)
 
     with col2:
-        st.subheader("Edge Detection")
-        st.image(edges,use_column_width=True)
+        st.subheader("Threshold")
+        st.image(thresh,use_column_width=True)
 
     st.stop()
 
 # ---------------- DRAW RESULTS ----------------
-
 col1,col2 = st.columns(2)
 
 with col1:
@@ -103,24 +107,22 @@ with col1:
     st.image(image,use_column_width=True)
 
 with col2:
+
     annotated = img.copy()
 
     for box in valid_cracks:
         cv2.drawContours(annotated,[box],0,(0,255,255),3)
 
-    st.subheader("Detected Cracks")
+    st.subheader("Detected Crack")
     st.image(annotated,use_column_width=True)
 
-# ---------------- WIDTH CALCULATION ----------------
-
+# ---------------- WIDTH ----------------
 max_width_pixels = int(max(widths))
 
-# Approximate pixel to mm conversion
 PIXEL_TO_MM = 0.02
 max_width_mm = max_width_pixels * PIXEL_TO_MM
 
-# ---------------- SEVERITY INDEX ----------------
-
+# ---------------- SEVERITY ----------------
 SI = max_width_mm / 0.30
 
 if SI <= 0.33:
@@ -130,8 +132,7 @@ elif SI <= 1.0:
 else:
     severity = "🔴 Severe"
 
-# ---------------- DISPLAY METRICS ----------------
-
+# ---------------- DISPLAY ----------------
 st.markdown("---")
 st.subheader("Crack Measurements")
 
@@ -143,7 +144,6 @@ st.markdown("---")
 st.subheader(f"Severity: {severity}")
 
 # ---------------- ACTION ----------------
-
 st.subheader("Suggested Action")
 
 if SI <= 0.33:
