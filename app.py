@@ -13,33 +13,40 @@ file = st.file_uploader("Upload image", type=["jpg","jpeg","png"])
 if file is None:
     st.stop()
 
-# ---------------- IMAGE PROCESS ----------------
+# ---------------- IMAGE ----------------
 image = Image.open(file).convert("RGB")
 img = np.array(image)
 
 gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
-# Contrast enhancement
-clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+# ---------------- CONTRAST ENHANCEMENT ----------------
+clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
 gray = clahe.apply(gray)
 
-# ---------------- CRACK DETECTION ----------------
-
-# Blur
+# ---------------- BLUR ----------------
 blur = cv2.GaussianBlur(gray,(5,5),0)
 
-# Edge detection
-edges = cv2.Canny(blur,40,120)
+# ---------------- ADAPTIVE THRESHOLD ----------------
+thresh = cv2.adaptiveThreshold(
+    blur,
+    255,
+    cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+    cv2.THRESH_BINARY_INV,
+    11,
+    2
+)
 
-# Connect crack segments
-kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(9,3))
-connected = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+# ---------------- MORPHOLOGY ----------------
+kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(5,5))
 
-# Remove small noise
-connected = cv2.morphologyEx(connected, cv2.MORPH_OPEN, np.ones((3,3),np.uint8))
+# connect crack fragments
+morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
-# Find contours
-contours,_ = cv2.findContours(connected,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+# remove noise
+morph = cv2.morphologyEx(morph, cv2.MORPH_OPEN, np.ones((3,3),np.uint8))
+
+# ---------------- CONTOURS ----------------
+contours,_ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
 valid_cracks=[]
 widths=[]
@@ -48,29 +55,23 @@ for cnt in contours:
 
     area = cv2.contourArea(cnt)
 
-    if area < 80:
+    if area < 50:
         continue
 
-    rect = cv2.minAreaRect(cnt)
-    (cx,cy),(w,h),angle = rect
+    x,y,w,h = cv2.boundingRect(cnt)
 
     length = max(w,h)
     width = min(w,h)
 
+    if length < 20:
+        continue
+
     aspect_ratio = length/(width+1)
 
-    # Crack must be long and thin
-    if aspect_ratio < 4:
+    if aspect_ratio < 2:
         continue
 
-    # Avoid large blobs
-    if width > 15:
-        continue
-
-    box = cv2.boxPoints(rect)
-    box = np.int32(box)
-
-    valid_cracks.append(box)
+    valid_cracks.append((x,y,w,h))
     widths.append(width)
 
 # ---------------- NO CRACK ----------------
@@ -81,12 +82,12 @@ if len(valid_cracks)==0:
     col1,col2 = st.columns(2)
 
     with col1:
-        st.subheader("Original Image")
+        st.subheader("Original")
         st.image(image,use_column_width=True)
 
     with col2:
-        st.subheader("Edge Detection")
-        st.image(edges,use_column_width=True)
+        st.subheader("Processed")
+        st.image(morph,use_column_width=True)
 
     st.stop()
 
@@ -99,24 +100,23 @@ with col1:
     st.image(image,use_column_width=True)
 
 with col2:
-    st.subheader("Detected Cracks")
 
     annotated = img.copy()
 
-    for box in valid_cracks:
-        cv2.drawContours(annotated,[box],0,(0,255,255),2)
+    for (x,y,w,h) in valid_cracks:
+        cv2.rectangle(annotated,(x,y),(x+w,y+h),(0,255,255),2)
 
+    st.subheader("Detected Cracks")
     st.image(annotated,use_column_width=True)
 
-# ---------------- WIDTH CALCULATION ----------------
+# ---------------- WIDTH ----------------
 
 max_width_pixels = int(max(widths))
 
-# NOTE: Approximate conversion
-PIXEL_TO_MM = 0.01
+PIXEL_TO_MM = 0.02
 max_width_mm = max_width_pixels * PIXEL_TO_MM
 
-# ---------------- SEVERITY INDEX ----------------
+# ---------------- SEVERITY ----------------
 
 SI = max_width_mm / 0.30
 
@@ -127,7 +127,7 @@ elif SI <= 1.0:
 else:
     severity = "🔴 Severe"
 
-# ---------------- DISPLAY METRICS ----------------
+# ---------------- METRICS ----------------
 
 st.markdown("---")
 st.subheader("Crack Measurements")
