@@ -19,20 +19,27 @@ img = np.array(image)
 
 gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
-# Enhance contrast
+# Contrast enhancement
 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
 gray = clahe.apply(gray)
 
 # ---------------- CRACK DETECTION ----------------
 
+# Blur
 blur = cv2.GaussianBlur(gray,(5,5),0)
 
+# Edge detection
 edges = cv2.Canny(blur,40,120)
 
-kernel = np.ones((3,3),np.uint8)
-dilated = cv2.dilate(edges,kernel,iterations=1)
+# Connect crack segments
+kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(9,3))
+connected = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
 
-contours,_ = cv2.findContours(dilated,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+# Remove small noise
+connected = cv2.morphologyEx(connected, cv2.MORPH_OPEN, np.ones((3,3),np.uint8))
+
+# Find contours
+contours,_ = cv2.findContours(connected,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
 
 valid_cracks=[]
 widths=[]
@@ -41,25 +48,29 @@ for cnt in contours:
 
     area = cv2.contourArea(cnt)
 
-    if area < 50:
+    if area < 80:
         continue
 
-    x,y,w,h = cv2.boundingRect(cnt)
+    rect = cv2.minAreaRect(cnt)
+    (cx,cy),(w,h),angle = rect
 
     length = max(w,h)
     width = min(w,h)
 
     aspect_ratio = length/(width+1)
 
-    # Crack must be somewhat elongated
-    if aspect_ratio < 1.5:
+    # Crack must be long and thin
+    if aspect_ratio < 4:
         continue
 
-    # Avoid very large blobs
-    if width > 30:
+    # Avoid large blobs
+    if width > 15:
         continue
 
-    valid_cracks.append((x,y,w,h))
+    box = cv2.boxPoints(rect)
+    box = np.int32(box)
+
+    valid_cracks.append(box)
     widths.append(width)
 
 # ---------------- NO CRACK ----------------
@@ -92,24 +103,16 @@ with col2:
 
     annotated = img.copy()
 
-    for (x,y,w,h) in valid_cracks:
-
-        pad = 3
-
-        cv2.rectangle(
-            annotated,
-            (x-pad,y-pad),
-            (x+w+pad,y+h+pad),
-            (0,255,255),
-            2
-        )
+    for box in valid_cracks:
+        cv2.drawContours(annotated,[box],0,(0,255,255),2)
 
     st.image(annotated,use_column_width=True)
 
 # ---------------- WIDTH CALCULATION ----------------
 
-max_width_pixels = max(widths)
+max_width_pixels = int(max(widths))
 
+# NOTE: Approximate conversion
 PIXEL_TO_MM = 0.01
 max_width_mm = max_width_pixels * PIXEL_TO_MM
 
