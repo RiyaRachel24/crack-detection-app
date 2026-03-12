@@ -19,7 +19,7 @@ gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
 # ---------------- CRACK DETECTION ----------------
 blur = cv2.GaussianBlur(gray, (5, 5), 0)
-edges = cv2.Canny(blur, 40, 120)
+edges = cv2.Canny(blur, 80, 200)
 
 kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 dilated = cv2.dilate(edges, kernel, iterations=1)
@@ -33,13 +33,27 @@ widths = []
 
 for cnt in contours:
     x, y, w, h = cv2.boundingRect(cnt)
+
+    area = cv2.contourArea(cnt)
     length = max(w, h)
     width = min(w, h)
 
-    # noise filtering (important)
-    if length < 60:
+    # Reject small noisy blobs
+    if area < 300:
         continue
-    if width < 2:
+
+    # Crack must be long
+    if length < 120:
+        continue
+
+    # Crack must be thin
+    if width > 25:
+        continue
+
+    # Crack must have high aspect ratio (long and thin)
+    aspect_ratio = length / (width + 1)
+
+    if aspect_ratio < 4:
         continue
 
     valid_cracks.append((x, y, w, h))
@@ -104,3 +118,4 @@ elif SI <= 1.0:
     st.write("• Crack filling\n• Waterproof coating")
 else:
     st.write("• Structural inspection required\n• Professional repair recommended")
+
